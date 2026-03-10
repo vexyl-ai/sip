@@ -1,0 +1,7 @@
+.claude/
+.DS_Store
+test/
+examples/
+doc/
+*.coffee
+vexyl-sip-tasks.md
