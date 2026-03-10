@@ -34,7 +34,7 @@ function Dialog(options) {
   EventEmitter.call(this);
 
   options = options || {};
-  this.id = options.callId || crypto.randomUUID();
+  this.id = options.callId || (crypto.randomUUID ? crypto.randomUUID() : crypto.randomBytes(16).toString('hex'));
   this.direction = options.direction || 'inbound';
   this.state = 'init'; // init, trying, ringing, active, held, ended
 
@@ -57,7 +57,11 @@ function Dialog(options) {
 
   // DTMF detector
   this.dtmfDetector = new dtmf.DtmfDetector(options.dtmf || {});
-  this.dtmfDetector.on('digit', this._onDtmf.bind(this));
+  this._boundOnDtmf = this._onDtmf.bind(this);
+  this.dtmfDetector.on('digit', this._boundOnDtmf);
+
+  // Track pending DTMF send timers for cleanup
+  this._dtmfTimers = [];
 
   // SDP state
   this.remoteSdp = null;
@@ -181,9 +185,14 @@ Dialog.prototype.accept = function(options) {
     });
 
     self.rtpSession.start(function(err, addr) {
-      if (err) return reject(err);
+      if (err) {
+        self.rtpSession.removeAllListeners();
+        self.rtpSession.stop();
+        self.rtpSession = null;
+        return reject(err);
+      }
 
-      var publicAddress = self._sipOptions.publicAddress || self._sipOptions.address || addr.address;
+      var publicAddress = self._sipOptions.publicAddress || self._sipOptions.address || addr.address || '127.0.0.1';
       var codecName = payloadType === 8 ? 'PCMA' : 'PCMU';
       var rtpmapLine = 'rtpmap:' + payloadType + ' ' + codecName + '/8000';
 
@@ -214,6 +223,11 @@ Dialog.prototype.accept = function(options) {
       var rs = self._sipMakeResponse(self.request, 200, 'OK');
       rs.headers['content-type'] = 'application/sdp';
       rs.content = sdpBody;
+
+      // Fix Contact header: use our own address, not the caller's
+      var sipPort = self._sipOptions.port || 5060;
+      var contactUri = 'sip:' + self.id + '@' + publicAddress + ':' + sipPort;
+      rs.headers.contact = [{uri: contactUri}];
 
       // RFC 3261 §12.1.1 — construct route set from Record-Route (reversed for UAS)
       if (self.request.headers['record-route']) {
@@ -286,6 +300,7 @@ Dialog.prototype.sendDtmf = function(digit, duration) {
   var sendCount = 0;
 
   function sendEvent() {
+    if (self.state !== 'active' || !self.rtpSession) return;
     if (sendCount < 3) {
       var dur = Math.min((sendCount + 1) * 160, duration);
       var payload = dtmf.buildRfc2833(digit, false, 10, dur);
@@ -295,13 +310,13 @@ Dialog.prototype.sendDtmf = function(digit, duration) {
       });
       self.rtpSession.timestamp = startTimestamp;
       sendCount++;
-      setTimeout(sendEvent, 20);
+      self._dtmfTimers.push(setTimeout(sendEvent, 20));
     } else if (sendCount < 6) {
       var payload = dtmf.buildRfc2833(digit, true, 10, duration);
       self.rtpSession.sendPayload(payload, { payloadType: 101 });
       self.rtpSession.timestamp = startTimestamp;
       sendCount++;
-      if (sendCount < 6) setTimeout(sendEvent, 20);
+      if (sendCount < 6) self._dtmfTimers.push(setTimeout(sendEvent, 20));
     }
   }
 
@@ -311,9 +326,12 @@ Dialog.prototype.sendDtmf = function(digit, duration) {
 // T-26: Send hold (re-INVITE with sendonly)
 Dialog.prototype.hold = function() {
   var self = this;
-  return new Promise(function(resolve, reject) {
-    if (self.state !== 'active' || !self._sipSend) return reject(new Error('Cannot hold'));
+  if (self.state !== 'active' || !self._sipSend) return Promise.reject(new Error('Cannot hold'));
 
+  // Set state immediately to prevent concurrent hold() calls
+  self.state = 'holding';
+
+  return new Promise(function(resolve, reject) {
     var holdSdp = JSON.parse(JSON.stringify(self.localSdp));
     if (holdSdp.m && holdSdp.m[0] && holdSdp.m[0].a) {
       holdSdp.m[0].a = holdSdp.m[0].a.map(function(a) {
@@ -336,6 +354,7 @@ Dialog.prototype.hold = function() {
         self.emit('hold');
         resolve();
       } else if (rs.status >= 300) {
+        self.state = 'active'; // Revert on failure
         reject(new Error('Hold failed: ' + rs.status));
       }
     });
@@ -345,9 +364,12 @@ Dialog.prototype.hold = function() {
 // T-26: Take off hold (re-INVITE with sendrecv)
 Dialog.prototype.unhold = function() {
   var self = this;
-  return new Promise(function(resolve, reject) {
-    if (self.state !== 'held' || !self._sipSend) return reject(new Error('Not on hold'));
+  if (self.state !== 'held' || !self._sipSend) return Promise.reject(new Error('Not on hold'));
 
+  // Set state immediately to prevent concurrent unhold() calls
+  self.state = 'unholding';
+
+  return new Promise(function(resolve, reject) {
     self._cseqOut++;
     var reinvite = self._buildRequest('INVITE');
     reinvite.headers['content-type'] = 'application/sdp';
@@ -362,6 +384,7 @@ Dialog.prototype.unhold = function() {
         self.emit('unhold');
         resolve();
       } else if (rs.status >= 300) {
+        self.state = 'held'; // Revert on failure
         reject(new Error('Unhold failed: ' + rs.status));
       }
     });
@@ -396,7 +419,7 @@ Dialog.prototype.refer = function(targetUri) {
     self._cseqOut++;
     var refer = self._buildRequest('REFER');
     refer.headers['refer-to'] = targetUri;
-    refer.headers['referred-by'] = self.localUri;
+    refer.headers['referred-by'] = self.localUri || ('sip:' + self.id + '@localhost');
 
     self._sipSend(refer, function(rs) {
       if (rs.status >= 200 && rs.status < 300) {
@@ -442,7 +465,7 @@ Dialog.prototype._buildRequest = function(method) {
   if (method === 'INVITE' || method === 'UPDATE' || method === 'REFER') {
     var localAddr = (this._sipOptions && this._sipOptions.publicAddress) || '127.0.0.1';
     var localPort = (this._sipOptions && this._sipOptions.port) || 5060;
-    rq.headers.contact = [{ uri: 'sip:vexyl@' + localAddr + ':' + localPort }];
+    rq.headers.contact = [{ uri: 'sip:' + this.id + '@' + localAddr + ':' + localPort }];
   }
 
   return rq;
@@ -522,6 +545,10 @@ Dialog.prototype._onReInvite = function(request) {
       rs.headers['content-type'] = 'application/sdp';
       rs.content = sdp.stringify(this.localSdp);
     }
+    // Fix Contact header: use our own address, not the caller's
+    var localAddr = (this._sipOptions && this._sipOptions.publicAddress) || '127.0.0.1';
+    var localPort = (this._sipOptions && this._sipOptions.port) || 5060;
+    rs.headers.contact = [{ uri: 'sip:' + this.id + '@' + localAddr + ':' + localPort }];
     this._sipSend(rs);
   }
 };
@@ -558,19 +585,29 @@ Dialog.prototype._end = function(reason) {
 
   this.state = 'ended';
 
-  // Stop RTP session and return port to pool
+  // Clear pending DTMF send timers
+  if (this._dtmfTimers) {
+    this._dtmfTimers.forEach(function(t) { clearTimeout(t); });
+    this._dtmfTimers = [];
+  }
+
+  // Stop RTP session, remove listeners, and return port to pool
   if (this.rtpSession) {
+    this.rtpSession.removeAllListeners();
     this.rtpSession.stop();
     this.rtpSession = null;
   }
 
-  // Reset DTMF detector
-  this.dtmfDetector.reset();
-
-  // Remove all listeners to prevent memory leaks
-  this._cleanedUp = true;
+  // Reset DTMF detector and remove listener
+  if (this.dtmfDetector) {
+    this.dtmfDetector.removeListener('digit', this._boundOnDtmf);
+    this.dtmfDetector.reset();
+  }
 
   this.emit('end', reason || 'unknown');
+
+  // Remove all dialog listeners after emitting 'end'
+  this.removeAllListeners();
 };
 
 Dialog.prototype.getStats = function() {

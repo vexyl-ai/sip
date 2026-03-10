@@ -50,7 +50,7 @@ function SipStack(options) {
   this._maxConcurrentCalls = this.options.maxConcurrentCalls || 0; // 0 = unlimited
 
   // T-28: OPTIONS keepalive
-  this._keepaliveTimer = null;
+  this._keepaliveTimers = null;
   this._keepaliveTargets = this.options.keepaliveTargets || []; // [{uri, interval}]
 
   // T-25: Digest auth credentials
@@ -187,16 +187,23 @@ SipStack.prototype.call = function(uri, options) {
     dialog.rtpSession = rtpSession;
 
     rtpSession.on('audio', function(pcm, header) {
-      dialog.emit('audio', pcm, header);
-      dialog.dtmfDetector.processRtp(header);
+      if (dialog.state === 'active') {
+        dialog.emit('audio', pcm, header);
+        dialog.dtmfDetector.processRtp(header);
+      }
     });
 
     rtpSession.on('error', function(err) {
       dialog.emit('error', err);
+      if (dialog.state !== 'ended') {
+        dialog._end('rtp-error');
+      }
     });
 
     rtpSession.start(function(err, addr) {
       if (err) {
+        rtpSession.removeAllListeners();
+        rtpSession.stop();
         delete self._dialogs[callId];
         return reject(err);
       }
@@ -377,7 +384,7 @@ SipStack.prototype.transfer = function(callId, targetUri) {
     dialog._cseqOut++;
     var refer = {
       method: 'REFER',
-      uri: referUri || dialog.request.headers.from.uri,
+      uri: referUri || (dialog.request && dialog.request.headers.from ? dialog.request.headers.from.uri : 'sip:unknown@localhost'),
       headers: {
         to: dialog.direction === 'inbound' ? dialog.request.headers.from : dialog.request.headers.to,
         from: dialog.direction === 'inbound' ? dialog.request.headers.to : dialog.request.headers.from,
@@ -385,7 +392,7 @@ SipStack.prototype.transfer = function(callId, targetUri) {
         cseq: { method: 'REFER', seq: dialog._cseqOut },
         'max-forwards': 70,
         'refer-to': targetUri,
-        'referred-by': dialog.localUri
+        'referred-by': dialog.localUri || ('sip:' + dialog.id + '@localhost')
       }
     };
 
@@ -447,7 +454,7 @@ SipStack.prototype._onRequest = function(request, remote) {
     var dialog = this._dialogs[callId];
     if (dialog) {
       dialog._onBye(request);
-      delete this._dialogs[callId];
+      // dialog._end() emits 'end' which triggers delete via dialog.on('end')
     } else {
       if (this._instance) {
         this._instance.send(sip.makeResponse(request, 481, 'Call/Transaction Does Not Exist'));
