@@ -1,11 +1,12 @@
 {
   "name": "@vexyl.ai/sip",
   "description": "Pure Node.js SIP stack for AI voice agents — no native deps, no sidecar",
-  "version": "1.0.1",
-  "homepage": "https://github.com/vexyl-ai/node-sip",
+  "version": "1.0.2",
+  "homepage": "https://github.com/vexyl-ai/sip",
   "author": "Vexyl AI",
   "contributors": [
-    "Kirill Mikhailov <kirill.mikhailov@gmail.com>"
+    "Kirill Mikhailov <kirill.mikhailov@gmail.com>",
+    "Anil Mathew <anilmathewm@yahoo.co.uk>"
   ],
   "main": "sip",
   "types": "index.d.ts",
