@@ -1,0 +1,54 @@
+{
+  "name": "@vexyl.ai/sip",
+  "description": "Pure Node.js SIP stack for AI voice agents — no native deps, no sidecar",
+  "version": "1.0.0",
+  "homepage": "https://github.com/vexyl-ai/node-sip",
+  "author": "Vexyl AI",
+  "contributors": [
+    "Kirill Mikhailov <kirill.mikhailov@gmail.com>"
+  ],
+  "main": "sip",
+  "types": "index.d.ts",
+  "exports": {
+    ".": "./sip.js",
+    "./sdp": "./sdp.js",
+    "./rtp": "./rtp.js",
+    "./dtmf": "./dtmf.js",
+    "./digest": "./digest.js",
+    "./dialog": "./dialog.js",
+    "./stack": "./stack.js",
+    "./vexyl-sip-bridge": "./vexyl-sip-bridge.js"
+  },
+  "scripts": {
+    "test": "./node_modules/.bin/coffee test/runtests.coffee",
+    "test:phase3": "node test/test-phase3.js",
+    "test:phase4": "node test/test-phase4.js",
+    "test:phase5": "node test/test-phase5.js",
+    "test:all": "node test/test-phase3.js && node test/test-phase4.js && node test/test-phase5.js",
+    "start:sip": "node sip-server.js"
+  },
+  "directories": {
+    "lib": "",
+    "example": "./examples",
+    "doc": "./doc"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vexyl-ai/node-sip.git"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "peerDependencies": {
+    "ws": ">=7.0.0"
+  },
+  "peerDependenciesMeta": {
+    "ws": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "coffee-script": "~1.6.2",
+    "ws": "^7.5.10"
+  }
+}
