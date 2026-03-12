@@ -464,6 +464,16 @@ new SipStack({
 
 ---
 
+## Relationship to `kirm/sip.js`
+
+This is an actively maintained fork of [kirm/sip.js](https://github.com/kirm/sip.js) by Kirill Mikhailov. The original library is an excellent RFC 3261 foundation — this fork builds on that work with bug fixes, production hardening, and new features for AI voice agent workloads.
+
+We've submitted our bug fixes as individual PRs to the upstream repo. If you're already using `kirm/sip.js` and only need the fixes, those PRs may be sufficient. If you need the full feature set (RTP, DTMF, Dialog API, etc.), this package is the way to go.
+
+**Migration from `kirm/sip.js`:** The classic API (`sip.start`, `sip.send`, `sip.makeResponse`) is 100% backwards compatible. You can swap `require('sip')` for `require('@vexyl.ai/sip')` with no code changes.
+
+---
+
 ## Credits
 
 Based on [kirm/sip.js](https://github.com/kirm/sip.js) by Kirill Mikhailov (MIT License).

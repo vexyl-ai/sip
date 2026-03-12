@@ -444,12 +444,28 @@ Dialog.prototype._buildRequest = function(method) {
     requestUri = this.request.headers.contact[0].uri;
   }
 
+  var toHeader = this.direction === 'inbound' ? this.request.headers.from : this.request.headers.to;
+  var fromHeader = this.direction === 'inbound' ? this.request.headers.to : this.request.headers.from;
+
+  // RFC 3261 §12.2.1.1 — in-dialog requests must include both tags
+  if (this.remoteTag && toHeader) {
+    toHeader = JSON.parse(JSON.stringify(toHeader));
+    if (!toHeader.params) toHeader.params = {};
+    toHeader.params.tag = this.remoteTag;
+  }
+
+  if (this.localTag && fromHeader) {
+    fromHeader = JSON.parse(JSON.stringify(fromHeader));
+    if (!fromHeader.params) fromHeader.params = {};
+    fromHeader.params.tag = this.localTag;
+  }
+
   var rq = {
     method: method,
     uri: requestUri,
     headers: {
-      to: this.direction === 'inbound' ? this.request.headers.from : this.request.headers.to,
-      from: this.direction === 'inbound' ? this.request.headers.to : this.request.headers.from,
+      to: toHeader,
+      from: fromHeader,
       'call-id': this.id,
       cseq: { method: method, seq: this._cseqOut },
       'max-forwards': 70

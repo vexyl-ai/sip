@@ -382,24 +382,9 @@ SipStack.prototype.transfer = function(callId, targetUri) {
     }
 
     dialog._cseqOut++;
-    var refer = {
-      method: 'REFER',
-      uri: referUri || (dialog.request && dialog.request.headers.from ? dialog.request.headers.from.uri : 'sip:unknown@localhost'),
-      headers: {
-        to: dialog.direction === 'inbound' ? dialog.request.headers.from : dialog.request.headers.to,
-        from: dialog.direction === 'inbound' ? dialog.request.headers.to : dialog.request.headers.from,
-        'call-id': dialog.id,
-        cseq: { method: 'REFER', seq: dialog._cseqOut },
-        'max-forwards': 70,
-        'refer-to': targetUri,
-        'referred-by': dialog.localUri || ('sip:' + dialog.id + '@localhost')
-      }
-    };
-
-    // RFC 3261 §12.2.1.1 — include Route set
-    if (dialog._routeSet && dialog._routeSet.length > 0) {
-      refer.headers.route = dialog._routeSet.slice();
-    }
+    var refer = dialog._buildRequest('REFER');
+    refer.headers['refer-to'] = targetUri;
+    refer.headers['referred-by'] = dialog.localUri || ('sip:' + dialog.id + '@localhost');
 
     self._instance.send(refer, function(rs) {
       if (rs.status >= 200 && rs.status < 300) {
