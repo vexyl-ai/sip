@@ -9,6 +9,7 @@
 
 var EventEmitter = require('events').EventEmitter;
 var crypto = require('crypto');
+var sip = require('./sip');
 var sdp = require('./sdp');
 var rtp = require('./rtp');
 var dtmf = require('./dtmf');
@@ -71,6 +72,11 @@ function Dialog(options) {
   this._routeSet = null;
   // Remote target (Contact URI) for request-URI of in-dialog requests
   this._remoteTarget = null;
+
+  // BYE transaction handle — for cancellation on inbound BYE
+  this._byeTransaction = null;
+  // NAT traversal — detected public address for in-dialog request routing
+  this._natAddress = null;
 
   // T-29: Cleanup tracking
   this._cleanedUp = false;
@@ -221,6 +227,8 @@ Dialog.prototype.accept = function(options) {
       var sdpBody = sdp.stringify(answerSdp);
 
       var rs = self._sipMakeResponse(self.request, 200, 'OK');
+      // Ensure To tag matches dialog.localTag so in-dialog requests use consistent tags (RFC 3261 §12.1.1)
+      rs.headers.to.params.tag = self.localTag;
       rs.headers['content-type'] = 'application/sdp';
       rs.content = sdpBody;
 
@@ -236,6 +244,19 @@ Dialog.prototype.accept = function(options) {
       // RFC 3261 §12.1.1 — remote target from Contact header
       if (self.request.headers.contact && self.request.headers.contact.length > 0) {
         self._remoteTarget = self.request.headers.contact[0].uri;
+      }
+
+      // NAT detection: compare Contact host with Via received parameter
+      if (self._remoteTarget && self.request.headers.via && self.request.headers.via.length > 0) {
+        var via0 = self.request.headers.via[0];
+        var received = via0.params && via0.params.received;
+        var rport = via0.params && via0.params.rport;
+        if (received) {
+          var contactParsed = sip.parseUri(self._remoteTarget);
+          if (contactParsed && contactParsed.host !== received) {
+            self._natAddress = { host: received, port: (rport && +rport) || contactParsed.port || 5060 };
+          }
+        }
       }
 
       self._sipSend(rs);
@@ -401,7 +422,8 @@ Dialog.prototype.bye = function() {
     self._cseqOut++;
     var bye = self._buildRequest('BYE');
 
-    self._sipSend(bye, function(rs) {
+    self._byeTransaction = self._sipSend(bye, function(rs) {
+      self._byeTransaction = null;
       self._end('local-bye');
       resolve(rs);
     });
@@ -442,6 +464,16 @@ Dialog.prototype._buildRequest = function(method) {
   // Fallback: if no stored remote target, check request Contact
   if (!this._remoteTarget && this.request && this.request.headers.contact && this.request.headers.contact.length > 0) {
     requestUri = this.request.headers.contact[0].uri;
+  }
+
+  // NAT traversal: override Request-URI host with detected public address
+  if (this._natAddress && requestUri) {
+    var parsed = sip.parseUri(requestUri);
+    if (parsed && parsed.schema !== 'sips') {
+      parsed.host = this._natAddress.host;
+      parsed.port = this._natAddress.port;
+      requestUri = sip.stringifyUri(parsed);
+    }
   }
 
   var toHeader = this.direction === 'inbound' ? this.request.headers.from : this.request.headers.to;
@@ -493,6 +525,11 @@ Dialog.prototype._onBye = function(request) {
   if (this._sipSend && this._sipMakeResponse) {
     var rs = this._sipMakeResponse(request, 200, 'OK');
     this._sipSend(rs);
+  }
+  // Cancel outbound BYE transaction if we had sent one (simultaneous BYE)
+  if (this._byeTransaction) {
+    this._byeTransaction.shutdown();
+    this._byeTransaction = null;
   }
   this._end('remote-bye');
 };
@@ -550,6 +587,21 @@ Dialog.prototype._onReInvite = function(request) {
   // RFC 3261 §12.2.2 — update remote target if Contact changed
   if (request.headers.contact && request.headers.contact.length > 0) {
     this._remoteTarget = request.headers.contact[0].uri;
+
+    // Re-evaluate NAT detection with updated Contact
+    if (request.headers.via && request.headers.via.length > 0) {
+      var via0 = request.headers.via[0];
+      var received = via0.params && via0.params.received;
+      var rport = via0.params && via0.params.rport;
+      if (received) {
+        var contactParsed = sip.parseUri(this._remoteTarget);
+        if (contactParsed && contactParsed.host !== received) {
+          this._natAddress = { host: received, port: (rport && +rport) || contactParsed.port || 5060 };
+        } else {
+          this._natAddress = null; // NAT no longer detected
+        }
+      }
+    }
   }
 
   this.emit('reinvite', request);
@@ -600,6 +652,12 @@ Dialog.prototype._end = function(reason) {
   if (this.state === 'ended') return;
 
   this.state = 'ended';
+
+  // Cancel any pending outbound BYE transaction
+  if (this._byeTransaction) {
+    this._byeTransaction.shutdown();
+    this._byeTransaction = null;
+  }
 
   // Clear pending DTMF send timers
   if (this._dtmfTimers) {

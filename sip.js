@@ -1655,12 +1655,15 @@ exports.create = function(options, callback) {
         t && t.send && t.send(m);
       }
       else {
+        // Transaction handle proxy — captures the client transaction once created
+        var txHandle = { _tx: null, shutdown: function() { if(this._tx) this._tx.shutdown(); } };
+
         var hop = parseUri(m.uri);
 
         if(!hop) {
           errorLog(new Error("Failed to parse URI: " + m.uri));
           if(callback) callback(makeResponse(m, 400, 'Bad Request'));
-          return;
+          return txHandle;
         }
 
         if(typeof m.headers.route === 'string') {
@@ -1701,7 +1704,7 @@ exports.create = function(options, callback) {
 
             if(m.headers.via.length === 0)
               m.headers.via.unshift({params: {branch: generateBranch()}});
-            
+
             if(addresses.length === 0) {
               errorLog(new Error("ACK: couldn't resolve " + stringifyUri(m.uri)));
               return;
@@ -1710,7 +1713,7 @@ exports.create = function(options, callback) {
             var cn = transport.open(addresses[0], errorLog);
             try {
               cn.send(m);
-            } 
+            }
             catch(e) {
               errorLog(e);
             }
@@ -1718,9 +1721,18 @@ exports.create = function(options, callback) {
               cn.release();
             }
           }
-          else
-            sequentialSearch(transaction.createClientTransaction.bind(transaction), transport.open.bind(transport), addresses, m, callback || function() {}); 
+          else {
+            // Wrap createClientTransaction to capture the transaction reference
+            var origCreate = transaction.createClientTransaction.bind(transaction);
+            sequentialSearch(function(connection, rq, cb) {
+              var tx = origCreate(connection, rq, cb);
+              txHandle._tx = tx;
+              return tx;
+            }, transport.open.bind(transport), addresses, m, callback || function() {});
+          }
         });
+
+        return txHandle;
       }
     },
     encodeFlowUri: function(flow) {

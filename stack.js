@@ -323,6 +323,15 @@ SipStack.prototype.call = function(uri, options) {
               dialog._remoteTarget = rs.headers.contact[0].uri;
             }
 
+            // NAT detection for UAC: compare Contact host with original dialed URI
+            if (dialog._remoteTarget) {
+              var contactParsed = sip.parseUri(dialog._remoteTarget);
+              var dialedParsed = sip.parseUri(uri);
+              if (contactParsed && dialedParsed && contactParsed.host !== dialedParsed.host) {
+                dialog._natAddress = { host: dialedParsed.host, port: dialedParsed.port || 5060 };
+              }
+            }
+
             // Send ACK
             var ackUri = (rs.headers.contact && rs.headers.contact.length > 0)
               ? rs.headers.contact[0].uri : uri;
