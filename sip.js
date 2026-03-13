@@ -1272,23 +1272,14 @@ function createServerTransaction(transport, cleanup) {
     }
   };
 
-  // RFC 3261 §17.2.2 — Timer G retransmits final response for unreliable transports
-  // Timer J absorbs retransmitted requests for 32s after final response
-  var g, j;
+  // RFC 3261 §17.2.2 — Timer J absorbs retransmitted requests for 32s after final response
+  var j;
   var completed = {
     message: function() { transport(rs); },
     enter: function() {
-      // Timer G: retransmit final response (starts at T1=500ms, doubles up to T2=4000ms)
-      if(!transport.reliable) {
-        g = setTimeout(function retry(t) {
-          transport(rs);
-          g = setTimeout(retry, Math.min(t * 2, 4000), Math.min(t * 2, 4000));
-        }, 500, 500);
-      }
-      // Timer J: 32s for unreliable, 0s for reliable (absorb retransmitted requests)
       j = setTimeout(function() { sm.enter(terminated); }, 32000);
     },
-    leave: function() { clearTimeout(g); clearTimeout(j); }
+    leave: function() { clearTimeout(j); }
   };
 
   var terminated = {enter: cleanup};

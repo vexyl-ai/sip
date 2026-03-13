@@ -226,7 +226,7 @@ Dialog.prototype.accept = function(options) {
 
       // Fix Contact header: use our own address, not the caller's
       var sipPort = self._sipOptions.port || 5060;
-      var contactUri = 'sip:' + self.id + '@' + publicAddress + ':' + sipPort;
+      var contactUri = 'sip:' + self.localTag + '@' + publicAddress + ':' + sipPort;
       rs.headers.contact = [{uri: contactUri}];
 
       // RFC 3261 §12.1.1 — construct route set from Record-Route (reversed for UAS)
@@ -419,7 +419,7 @@ Dialog.prototype.refer = function(targetUri) {
     self._cseqOut++;
     var refer = self._buildRequest('REFER');
     refer.headers['refer-to'] = targetUri;
-    refer.headers['referred-by'] = self.localUri || ('sip:' + self.id + '@localhost');
+    refer.headers['referred-by'] = self.localUri || ('sip:' + self.localTag + '@localhost');
 
     self._sipSend(refer, function(rs) {
       if (rs.status >= 200 && rs.status < 300) {
@@ -481,7 +481,7 @@ Dialog.prototype._buildRequest = function(method) {
   if (method === 'INVITE' || method === 'UPDATE' || method === 'REFER') {
     var localAddr = (this._sipOptions && this._sipOptions.publicAddress) || '127.0.0.1';
     var localPort = (this._sipOptions && this._sipOptions.port) || 5060;
-    rq.headers.contact = [{ uri: 'sip:' + this.id + '@' + localAddr + ':' + localPort }];
+    rq.headers.contact = [{ uri: 'sip:' + this.localTag + '@' + localAddr + ':' + localPort }];
   }
 
   return rq;
@@ -564,7 +564,7 @@ Dialog.prototype._onReInvite = function(request) {
     // Fix Contact header: use our own address, not the caller's
     var localAddr = (this._sipOptions && this._sipOptions.publicAddress) || '127.0.0.1';
     var localPort = (this._sipOptions && this._sipOptions.port) || 5060;
-    rs.headers.contact = [{ uri: 'sip:' + this.id + '@' + localAddr + ':' + localPort }];
+    rs.headers.contact = [{ uri: 'sip:' + this.localTag + '@' + localAddr + ':' + localPort }];
     this._sipSend(rs);
   }
 };

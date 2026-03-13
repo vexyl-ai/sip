@@ -245,7 +245,7 @@ SipStack.prototype.call = function(uri, options) {
             from: { uri: fromUri, params: { tag: localTag } },
             'call-id': callId,
             cseq: { method: 'INVITE', seq: cseqNum },
-            contact: [{ uri: 'sip:vexyl@' + publicAddress + ':' + self.options.port }],
+            contact: [{ uri: 'sip:' + localTag + '@' + publicAddress + ':' + self.options.port }],
             'max-forwards': 70,
             'content-type': 'application/sdp'
           },
@@ -384,7 +384,7 @@ SipStack.prototype.transfer = function(callId, targetUri) {
     dialog._cseqOut++;
     var refer = dialog._buildRequest('REFER');
     refer.headers['refer-to'] = targetUri;
-    refer.headers['referred-by'] = dialog.localUri || ('sip:' + dialog.id + '@localhost');
+    refer.headers['referred-by'] = dialog.localUri || ('sip:' + dialog.localTag + '@localhost');
 
     self._instance.send(refer, function(rs) {
       if (rs.status >= 200 && rs.status < 300) {
