@@ -396,6 +396,7 @@ new SipStack({
 
 ### Bug Fixes (22 fixes)
 
+- **dialog.js** — To-tag mismatch in 200 OK caused 481 on BYE (dialog `localTag` diverged from `makeResponse` auto-generated tag, violating RFC 3261 §12.1.1)
 - **#131/#105** — Replace deprecated `new Buffer()` with `Buffer.from()`
 - **#136** — Crash on malformed headers (robust `checkMessage` validation)
 - **#137** — `copyMessage` deep copy crash on `null` values
@@ -461,6 +462,12 @@ new SipStack({
 +-- package.json
 +-- README.md
 ```
+
+---
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for a detailed list of changes per version.
 
 ---
 
