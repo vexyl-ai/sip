@@ -496,6 +496,77 @@ await testAsync('_startKeepalives is idempotent: repeated register(..., {keepali
   }
 });
 
+console.log('\n=== RegistrationClient: final-review regressions ===');
+
+await testAsync('BUG1 regression: stop() sends Expires:0 unregister even when a refresh backoff is pending', async function() {
+  var sent = [];
+  var client = new RegistrationClient({
+    aor: 'sip:100@pbx.local',
+    publicAddress: '10.0.0.5',
+    port: 5060,
+    backoffFloorMs: 10000,        // stays pending for the life of this test
+    sipSend: function(rq, cb) {
+      sent.push(rq);
+      if (sent.length === 1) {
+        setImmediate(function() { cb(ok200(rq, 2)); });   // small granted expiry
+      } else if (sent.length === 2) {
+        setImmediate(function() { cb({ status: 503, reason: 'Service Unavailable',
+          headers: { to: rq.headers.to, from: rq.headers.from,
+                     'call-id': rq.headers['call-id'], cseq: rq.headers.cseq } }); });
+      } else {
+        setImmediate(function() { cb(ok200(rq, rq.headers.expires)); });   // the unregister
+      }
+    }
+  });
+
+  await new Promise(function(resolve) { client.on('registered', resolve); client.register(); });
+  client._clearRefresh();   // avoid a race with the real scheduled refresh timer; we trigger it manually below
+
+  await new Promise(function(resolve, reject) {
+    client.once('failed', function(err, willRetry) {
+      if (willRetry) resolve(); else reject(err);
+    });
+    client.register();   // simulate the scheduled refresh firing
+  });
+
+  assert.strictEqual(client.state, 'refreshing', 'state must be refreshing while a backoff retry is pending');
+  assert.ok(client._backoffTimer, 'a backoff retry must be pending');
+
+  var unregisteredFired = false;
+  client.on('unregistered', function() { unregisteredFired = true; });
+  await client.stop();
+
+  var unregisterSent = sent.some(function(rq) { return rq.headers.expires === 0; });
+  assert.ok(unregisterSent, 'stop() must send an Expires:0 REGISTER even though a backoff was pending');
+  assert.strictEqual(unregisteredFired, true, 'unregistered must be emitted');
+  assert.strictEqual(client.state, 'unregistered');
+});
+
+await testAsync('BUG2 regression: permanent rejection (403) is terminal, no retry loop', async function() {
+  var sent = [];
+  var client = new RegistrationClient({
+    aor: 'sip:100@pbx.local',
+    publicAddress: '10.0.0.5',
+    port: 5060,
+    sipSend: function(rq, cb) {
+      sent.push(rq);
+      setImmediate(function() { cb({ status: 403, reason: 'Forbidden',
+        headers: { to: rq.headers.to, from: rq.headers.from,
+                   'call-id': rq.headers['call-id'], cseq: rq.headers.cseq } }); });
+    }
+  });
+  var failures = [];
+  client.on('failed', function(err, willRetry) { failures.push(willRetry); });
+  client.register();
+
+  await new Promise(function(resolve) { setTimeout(resolve, 50); });   // give a would-be retry loop a chance to fire
+
+  assert.deepStrictEqual(failures, [false], 'exactly one terminal failed(willRetry=false)');
+  assert.strictEqual(client.state, 'unregistered');
+  assert.strictEqual(sent.length, 1, 'must not retry a permanent rejection');
+  client.stopTimers();
+});
+
 })();
 
 mainRun.then(function() {

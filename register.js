@@ -34,6 +34,7 @@ function RegistrationClient(options) {
   this._authCtx = {};
   this._authAttempted = false;
   this._retried423 = false;
+  this._bound = false;
 }
 
 RegistrationClient.prototype = Object.create(EventEmitter.prototype);
@@ -92,6 +93,7 @@ RegistrationClient.prototype._onResponse = function(rq, rs) {
     this._backoffMs = this._backoffFloorMs;   // reset backoff on success
     var granted = grantedExpires(rs, this.requestedExpires);
     this.state = 'registered';
+    this._bound = true;
     this._scheduleRefresh(granted);
     this.emit('registered', granted);
     return;
@@ -122,13 +124,19 @@ RegistrationClient.prototype._onResponse = function(rq, rs) {
     return;
   }
 
-  // 408 (transaction timeout), 503, and anything else unexpected: retry with backoff
-  this._fail(new Error('Registration failed: ' + rs.status + ' ' + (rs.reason || '')), true);
-  this._backoffTimer = setTimeout(function() {
-    self._backoffTimer = null;
-    self._sendRegister(self._buildRegister(self.requestedExpires));
-  }, this._backoffMs);
-  this._backoffMs = Math.min(this._backoffMs * 2, 60000);
+  // Retryable: request timeout (408) and server errors (5xx) — back off and retry
+  if (rs.status === 408 || (rs.status >= 500 && rs.status <= 599)) {
+    this._fail(new Error('Registration failed: ' + rs.status + ' ' + (rs.reason || '')), true);
+    this._backoffTimer = setTimeout(function() {
+      self._backoffTimer = null;
+      self._sendRegister(self._buildRegister(self.requestedExpires));
+    }, this._backoffMs);
+    this._backoffMs = Math.min(this._backoffMs * 2, 60000);
+    return;
+  }
+
+  // Permanent rejection (other 4xx, 3xx, 6xx): terminal failure, no retry
+  this._fail(new Error('Registration rejected: ' + rs.status + ' ' + (rs.reason || '')), false);
 };
 
 RegistrationClient.prototype._fail = function(err, willRetry) {
@@ -188,7 +196,12 @@ RegistrationClient.prototype.stop = function() {
   var self = this;
   this.stopTimers();
 
-  if (this.state === 'unregistered' || this.state === 'unregistering') {
+  if (this.state === 'unregistering') {
+    // an unregister is already in flight; don't send a second or double-emit
+    return Promise.resolve();
+  }
+  if (!this._bound) {
+    // never confirmed a binding (or already cleared) — nothing to unregister
     this.state = 'unregistered';
     return Promise.resolve();
   }
@@ -200,6 +213,7 @@ RegistrationClient.prototype.stop = function() {
     var finish = function() {
       if (done) return;
       done = true;
+      self._bound = false;
       self.state = 'unregistered';
       self.emit('unregistered');
       resolve();
