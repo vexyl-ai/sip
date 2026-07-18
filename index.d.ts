@@ -579,6 +579,45 @@ export interface StackStats {
   rtpPorts: rtp.PortPoolStats | null;
 }
 
+// ============================================================================
+// Registration client (register.js) — RFC 3261 §10
+// ============================================================================
+
+export interface RegistrationOptions {
+  registrarUri?: string;
+  credentials?: { user: string; password: string; realm?: string };
+  expires?: number;
+  keepalive?: boolean;
+  keepaliveInterval?: number;
+  backoffFloorMs?: number;
+}
+
+export type RegistrationState =
+  | 'unregistered' | 'registering' | 'registered'
+  | 'refreshing' | 'unregistering';
+
+export class RegistrationClient extends EventEmitter {
+  aor: string;
+  registrarUri: string;
+  state: RegistrationState;
+
+  register(): void;
+  stop(): Promise<void>;
+  stopTimers(): void;
+  getStats(): {
+    aor: string;
+    registrarUri: string;
+    state: RegistrationState;
+    cseq: number;
+    requestedExpires: number;
+  };
+
+  on(event: 'registered', listener: (grantedExpires: number) => void): this;
+  on(event: 'unregistered', listener: () => void): this;
+  on(event: 'failed', listener: (err: Error, willRetry: boolean) => void): this;
+  on(event: string, listener: (...args: any[]) => void): this;
+}
+
 export class SipStack extends EventEmitter {
   options: SipStackOptions;
   active: boolean;
@@ -589,6 +628,9 @@ export class SipStack extends EventEmitter {
   stop(): Promise<void>;
   call(uri: string, options?: CallOptions): Promise<Dialog>;
   send(message: SipMessage, callback?: SipResponseCallback): void;
+
+  register(aor: string, options?: RegistrationOptions): RegistrationClient;
+  getRegistrations(): RegistrationClient[];
 
   // T-27: Call transfer
   transfer(callId: string, targetUri: string): Promise<SipResponse>;

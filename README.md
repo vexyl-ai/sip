@@ -233,6 +233,23 @@ stack.on('invite', async (dialog) => {
 | `refer` | `(targetUri, request)` | REFER received |
 | `transferred` | `(targetUri)` | REFER sent successfully |
 
+### RegistrationClient (`@vexyl.ai/sip/register`)
+
+Register as a PBX extension (RFC 3261 §10). Auto-refreshes at 80% of the
+granted interval, retries digest auth once, honors 423 Min-Expires, backs
+off exponentially on transport failure, unregisters on `stack.stop()`.
+
+```js
+const reg = stack.register('sip:100@pbx.local', {
+  credentials: { user: '100', password: 'secret' },
+  expires: 3600,
+  keepalive: true,
+});
+reg.on('registered', (expires) => console.log('registered for', expires, 's'));
+reg.on('failed', (err, willRetry) => console.log(err.message, { willRetry }));
+await reg.stop(); // unregister
+```
+
 ### RTP (`@vexyl.ai/sip/rtp`)
 
 ```js

@@ -42,6 +42,10 @@
     "./vexyl-sip-bridge": {
       "types": "./vexyl-sip-bridge.d.ts",
       "default": "./vexyl-sip-bridge.js"
+    },
+    "./register": {
+      "types": "./register.d.ts",
+      "default": "./register.js"
     }
   },
   "scripts": {
