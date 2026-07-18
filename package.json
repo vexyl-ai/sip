@@ -1,7 +1,7 @@
 {
   "name": "@vexyl.ai/sip",
   "description": "Pure Node.js SIP stack for AI voice agents — no native deps, no sidecar",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "homepage": "https://github.com/vexyl-ai/sip",
   "author": "Vexyl AI",
   "contributors": [
@@ -11,14 +11,38 @@
   "main": "sip",
   "types": "index.d.ts",
   "exports": {
-    ".": { "types": "./index.d.ts", "default": "./sip.js" },
-    "./sdp": { "types": "./sdp.d.ts", "default": "./sdp.js" },
-    "./rtp": { "types": "./rtp.d.ts", "default": "./rtp.js" },
-    "./dtmf": { "types": "./dtmf.d.ts", "default": "./dtmf.js" },
-    "./digest": { "types": "./digest.d.ts", "default": "./digest.js" },
-    "./dialog": { "types": "./dialog.d.ts", "default": "./dialog.js" },
-    "./stack": { "types": "./stack.d.ts", "default": "./stack.js" },
-    "./vexyl-sip-bridge": { "types": "./vexyl-sip-bridge.d.ts", "default": "./vexyl-sip-bridge.js" }
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./sip.js"
+    },
+    "./sdp": {
+      "types": "./sdp.d.ts",
+      "default": "./sdp.js"
+    },
+    "./rtp": {
+      "types": "./rtp.d.ts",
+      "default": "./rtp.js"
+    },
+    "./dtmf": {
+      "types": "./dtmf.d.ts",
+      "default": "./dtmf.js"
+    },
+    "./digest": {
+      "types": "./digest.d.ts",
+      "default": "./digest.js"
+    },
+    "./dialog": {
+      "types": "./dialog.d.ts",
+      "default": "./dialog.js"
+    },
+    "./stack": {
+      "types": "./stack.d.ts",
+      "default": "./stack.js"
+    },
+    "./vexyl-sip-bridge": {
+      "types": "./vexyl-sip-bridge.d.ts",
+      "default": "./vexyl-sip-bridge.js"
+    }
   },
   "scripts": {
     "test": "./node_modules/.bin/coffee test/runtests.coffee",
