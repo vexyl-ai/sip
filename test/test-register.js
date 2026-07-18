@@ -317,6 +317,42 @@ await testAsync('backoff delay doubles', async function() {
   client.stopTimers();
 });
 
+await testAsync('stopTimers() during pending backoff resets state so register() works again', async function() {
+  var sent = [];
+  var client = new RegistrationClient({
+    aor: 'sip:100@pbx.local',
+    publicAddress: '10.0.0.5',
+    port: 5060,
+    backoffFloorMs: 10000,        // stays pending for the life of this test
+    sipSend: function(rq, cb) {
+      sent.push(rq);
+      setImmediate(function() { cb({ status: 503, reason: 'Service Unavailable',
+        headers: { to: rq.headers.to, from: rq.headers.from,
+                   'call-id': rq.headers['call-id'], cseq: rq.headers.cseq } }); });
+    }
+  });
+
+  await new Promise(function(resolve, reject) {
+    client.on('failed', function(err, willRetry) {
+      if (willRetry) resolve(); else reject(err);
+    });
+    client.register();
+  });
+
+  assert.strictEqual(client.state, 'registering');
+  assert.ok(client._backoffTimer, 'backoff retry must be pending');
+  assert.strictEqual(sent.length, 1);
+
+  client.stopTimers();
+
+  assert.strictEqual(client.state, 'unregistered', 'stopTimers() must clear the in-progress guard');
+
+  client.register();
+  assert.strictEqual(sent.length, 2, 'register() after stopTimers() must send a fresh REGISTER');
+
+  client.stopTimers();
+});
+
 })();
 
 mainRun.then(function() {

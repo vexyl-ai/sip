@@ -122,11 +122,10 @@ RegistrationClient.prototype._onResponse = function(rq, rs) {
   }
 
   // 408 (transaction timeout), 503, and anything else unexpected: retry with backoff
-  var self2 = this;
   this._fail(new Error('Registration failed: ' + rs.status + ' ' + (rs.reason || '')), true);
   this._backoffTimer = setTimeout(function() {
-    self2._backoffTimer = null;
-    self2._sendRegister(self2._buildRegister(self2.requestedExpires));
+    self._backoffTimer = null;
+    self._sendRegister(self._buildRegister(self.requestedExpires));
   }, this._backoffMs);
   this._backoffMs = Math.min(this._backoffMs * 2, 60000);
 };
@@ -174,6 +173,11 @@ RegistrationClient.prototype.stopTimers = function() {
   if (this._backoffTimer) {
     clearTimeout(this._backoffTimer);
     this._backoffTimer = null;
+    // A backoff retry was only scheduled, not in flight — return to a clean
+    // state so a later register() is not blocked by the in-progress guard.
+    if (this.state === 'registering' || this.state === 'refreshing') {
+      this.state = 'unregistered';
+    }
   }
 };
 
