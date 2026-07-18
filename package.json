@@ -11,14 +11,14 @@
   "main": "sip",
   "types": "index.d.ts",
   "exports": {
-    ".": "./sip.js",
-    "./sdp": "./sdp.js",
-    "./rtp": "./rtp.js",
-    "./dtmf": "./dtmf.js",
-    "./digest": "./digest.js",
-    "./dialog": "./dialog.js",
-    "./stack": "./stack.js",
-    "./vexyl-sip-bridge": "./vexyl-sip-bridge.js"
+    ".": { "types": "./index.d.ts", "default": "./sip.js" },
+    "./sdp": { "types": "./sdp.d.ts", "default": "./sdp.js" },
+    "./rtp": { "types": "./rtp.d.ts", "default": "./rtp.js" },
+    "./dtmf": { "types": "./dtmf.d.ts", "default": "./dtmf.js" },
+    "./digest": { "types": "./digest.d.ts", "default": "./digest.js" },
+    "./dialog": { "types": "./dialog.d.ts", "default": "./dialog.js" },
+    "./stack": { "types": "./stack.d.ts", "default": "./stack.js" },
+    "./vexyl-sip-bridge": { "types": "./vexyl-sip-bridge.d.ts", "default": "./vexyl-sip-bridge.js" }
   },
   "scripts": {
     "test": "./node_modules/.bin/coffee test/runtests.coffee",
