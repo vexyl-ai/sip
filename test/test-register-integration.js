@@ -43,7 +43,7 @@ async function main() {
 
     // Verify Asterisk sees the contact
     var contacts = sh('docker exec ' + CONTAINER + ' asterisk -rx "pjsip show contacts"');
-    assert.ok(/100/.test(contacts), 'Asterisk must list contact for 100');
+    assert.ok(/Contact:\s+100\/sip/.test(contacts), 'Asterisk must list contact for 100');
     console.log('  ✓ contact visible in Asterisk');
 
     await stack.stop();
