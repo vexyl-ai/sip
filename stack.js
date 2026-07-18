@@ -563,6 +563,8 @@ SipStack.prototype._onInvite = function(request, remote) {
 SipStack.prototype._startKeepalives = function() {
   var self = this;
 
+  this._stopKeepalives();
+
   if (!this._keepaliveTargets || this._keepaliveTargets.length === 0) return;
 
   this._keepaliveTimers = this._keepaliveTargets.map(function(target) {

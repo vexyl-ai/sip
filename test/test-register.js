@@ -437,6 +437,65 @@ await testAsync('stack.register returns started client; stack.stop unregisters',
   assert.strictEqual(stack.getRegistrations().length, 0);
 });
 
+console.log('\n=== SipStack.register: keepalive timer leak (bugfix regression) ===');
+
+await testAsync('_startKeepalives is idempotent: repeated register(..., {keepalive:true}) must not orphan timers', async function() {
+  var stack = new SipStack({ port: 45081, publicAddress: '127.0.0.1' });
+  await stack.start();
+
+  // Spy on global setInterval/clearInterval to count real timer creation/teardown.
+  // We can't rely on _keepaliveTimers.length alone: the buggy code rebuilds the
+  // array from ALL targets on every call, so its length always tracks
+  // _keepaliveTargets.length whether or not earlier timers were leaked.
+  var realSetInterval = global.setInterval;
+  var realClearInterval = global.clearInterval;
+  var setIntervalCalls = 0;
+  var clearIntervalCalls = 0;
+  global.setInterval = function() {
+    setIntervalCalls++;
+    return realSetInterval.apply(this, arguments);
+  };
+  global.clearInterval = function() {
+    clearIntervalCalls++;
+    return realClearInterval.apply(this, arguments);
+  };
+
+  try {
+    var client1 = stack.register('sip:100@127.0.0.1:45999', {
+      credentials: { user: '100', password: 'x' },
+      keepalive: true,
+      keepaliveInterval: 999999, // long enough to never fire during the test
+      _sipSendOverride: function(rq, cb) {
+        setImmediate(function() { cb(ok200(rq, 60)); });
+      }
+    });
+    await new Promise(function(resolve) { client1.on('registered', resolve); });
+
+    var client2 = stack.register('sip:200@127.0.0.1:45999', {
+      credentials: { user: '200', password: 'x' },
+      keepalive: true,
+      keepaliveInterval: 999999,
+      _sipSendOverride: function(rq, cb) {
+        setImmediate(function() { cb(ok200(rq, 60)); });
+      }
+    });
+    await new Promise(function(resolve) { client2.on('registered', resolve); });
+
+    assert.strictEqual(stack._keepaliveTargets.length, 2, 'two keepalive targets registered');
+
+    await stack.stop();
+
+    assert.strictEqual(
+      setIntervalCalls, clearIntervalCalls,
+      'every keepalive timer ever created must be cleared by stop() (setInterval=' +
+        setIntervalCalls + ', clearInterval=' + clearIntervalCalls + ')'
+    );
+  } finally {
+    global.setInterval = realSetInterval;
+    global.clearInterval = realClearInterval;
+  }
+});
+
 })();
 
 mainRun.then(function() {
