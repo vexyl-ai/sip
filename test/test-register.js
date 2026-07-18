@@ -353,6 +353,61 @@ await testAsync('stopTimers() during pending backoff resets state so register() 
   client.stopTimers();
 });
 
+console.log('\n=== RegistrationClient: stop/unregister ===');
+
+await testAsync('stop() sends Expires:0 and emits unregistered', async function() {
+  var sent = [];
+  var client = new RegistrationClient({
+    aor: 'sip:100@pbx.local',
+    publicAddress: '10.0.0.5',
+    port: 5060,
+    sipSend: function(rq, cb) { sent.push(rq); setImmediate(function() { cb(ok200(rq, rq.headers.expires)); }); }
+  });
+  await new Promise(function(resolve) { client.on('registered', resolve); client.register(); });
+
+  var unregisteredFired = false;
+  client.on('unregistered', function() { unregisteredFired = true; });
+  await client.stop();
+
+  assert.strictEqual(client.state, 'unregistered');
+  assert.strictEqual(unregisteredFired, true);
+  assert.strictEqual(client.getStats().state, 'unregistered');
+  var last = sent[sent.length - 1];
+  assert.strictEqual(last.headers.expires, 0);
+  assert.strictEqual(last.headers.cseq.seq, 2, 'unregister must bump CSeq');
+});
+
+await testAsync('stop() when never registered resolves without sending', async function() {
+  var sent = [];
+  var client = new RegistrationClient({
+    aor: 'sip:100@pbx.local',
+    publicAddress: '10.0.0.5',
+    port: 5060,
+    sipSend: function(rq, cb) { sent.push(rq); }
+  });
+  await client.stop();
+  assert.strictEqual(sent.length, 0);
+});
+
+await testAsync('stop() resolves even if unregister gets no useful answer', async function() {
+  var calls = 0;
+  var client = new RegistrationClient({
+    aor: 'sip:100@pbx.local',
+    publicAddress: '10.0.0.5',
+    port: 5060,
+    sipSend: function(rq, cb) {
+      calls++;
+      if (calls === 1) setImmediate(function() { cb(ok200(rq, 300)); });
+      else setImmediate(function() { cb({ status: 503, reason: 'Service Unavailable',
+        headers: { to: rq.headers.to, from: rq.headers.from,
+                   'call-id': rq.headers['call-id'], cseq: rq.headers.cseq } }); });
+    }
+  });
+  await new Promise(function(resolve) { client.on('registered', resolve); client.register(); });
+  await client.stop();   // must not hang or loop on the 503
+  assert.strictEqual(client.state, 'unregistered');
+});
+
 })();
 
 mainRun.then(function() {

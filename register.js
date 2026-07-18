@@ -84,6 +84,7 @@ RegistrationClient.prototype._sendRegister = function(rq) {
 
 RegistrationClient.prototype._onResponse = function(rq, rs) {
   var self = this;
+  if (this.state === 'unregistering' || this.state === 'unregistered') return;
 
   if (rs.status >= 200 && rs.status < 300) {
     this._authAttempted = false;   // fresh auth cycle for next refresh
@@ -179,6 +180,53 @@ RegistrationClient.prototype.stopTimers = function() {
       this.state = 'unregistered';
     }
   }
+};
+
+// Unregister: Expires 0. Resolves regardless of the registrar's answer —
+// teardown must never hang on a dead registrar.
+RegistrationClient.prototype.stop = function() {
+  var self = this;
+  this.stopTimers();
+
+  if (this.state === 'unregistered' || this.state === 'unregistering') {
+    this.state = 'unregistered';
+    return Promise.resolve();
+  }
+
+  this.state = 'unregistering';
+  return new Promise(function(resolve) {
+    var rq = self._buildRegister(0);
+    var done = false;
+    var finish = function() {
+      if (done) return;
+      done = true;
+      self.state = 'unregistered';
+      self.emit('unregistered');
+      resolve();
+    };
+    var guard = setTimeout(finish, 2000);   // registrar unreachable → resolve anyway
+    self._sipSend(rq, function(rs) {
+      // Auth the unregister if challenged, once
+      if ((rs.status === 401 || rs.status === 407) && self.credentials && !done) {
+        var retry = self._buildRegister(0);
+        digest.signRequest(self._authCtx, retry, rs, self.credentials);
+        self._sipSend(retry, function() { clearTimeout(guard); finish(); });
+        return;
+      }
+      clearTimeout(guard);
+      finish();
+    });
+  });
+};
+
+RegistrationClient.prototype.getStats = function() {
+  return {
+    aor: this.aor,
+    registrarUri: this.registrarUri,
+    state: this.state,
+    cseq: this._cseq,
+    requestedExpires: this.requestedExpires
+  };
 };
 
 exports.RegistrationClient = RegistrationClient;
