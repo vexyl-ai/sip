@@ -195,6 +195,67 @@ await testAsync('401 with no credentials → failed immediately', async function
   client.stopTimers();
 });
 
+console.log('\n=== RegistrationClient: 423 handling ===');
+
+await testAsync('423 → retry with Min-Expires → registered', async function() {
+  var sent = [];
+  var client = new RegistrationClient({
+    aor: 'sip:100@pbx.local',
+    publicAddress: '10.0.0.5',
+    port: 5060,
+    expires: 60,
+    sipSend: function(rq, cb) {
+      sent.push(rq);
+      if (sent.length === 1) {
+        setImmediate(function() { cb({
+          status: 423, reason: 'Interval Too Brief',
+          headers: {
+            to: rq.headers.to, from: rq.headers.from,
+            'call-id': rq.headers['call-id'], cseq: rq.headers.cseq,
+            'min-expires': 1800
+          }
+        }); });
+      } else {
+        setImmediate(function() { cb(ok200(rq, 1800)); });
+      }
+    }
+  });
+  var granted = await new Promise(function(resolve, reject) {
+    client.on('registered', resolve);
+    client.on('failed', function(e) { reject(e); });
+    client.register();
+  });
+  assert.strictEqual(granted, 1800);
+  assert.strictEqual(sent[1].headers.expires, 1800, 'retry must use Min-Expires');
+  client.stopTimers();
+});
+
+await testAsync('double 423 → failed, no loop', async function() {
+  var sent = [];
+  var client = new RegistrationClient({
+    aor: 'sip:100@pbx.local',
+    publicAddress: '10.0.0.5',
+    port: 5060,
+    expires: 60,
+    sipSend: function(rq, cb) {
+      sent.push(rq);
+      setImmediate(function() { cb({
+        status: 423, reason: 'Interval Too Brief',
+        headers: { to: rq.headers.to, from: rq.headers.from,
+                   'call-id': rq.headers['call-id'], cseq: rq.headers.cseq,
+                   'min-expires': 1800 }
+      }); });
+    }
+  });
+  var result = await new Promise(function(resolve) {
+    client.on('failed', function(err, willRetry) { resolve({ willRetry: willRetry }); });
+    client.register();
+  });
+  assert.strictEqual(result.willRetry, false);
+  assert.strictEqual(sent.length, 2);
+  client.stopTimers();
+});
+
 })();
 
 mainRun.then(function() {

@@ -30,6 +30,7 @@ function RegistrationClient(options) {
   this._refreshTimer = null;
   this._authCtx = {};
   this._authAttempted = false;
+  this._retried423 = false;
 }
 
 RegistrationClient.prototype = Object.create(EventEmitter.prototype);
@@ -83,6 +84,7 @@ RegistrationClient.prototype._onResponse = function(rq, rs) {
 
   if (rs.status >= 200 && rs.status < 300) {
     this._authAttempted = false;   // fresh auth cycle for next refresh
+    this._retried423 = false;
     var granted = grantedExpires(rs, this.requestedExpires);
     this.state = 'registered';
     this._scheduleRefresh(granted);
@@ -100,6 +102,18 @@ RegistrationClient.prototype._onResponse = function(rq, rs) {
       return;
     }
     this._fail(new Error('Registration auth failed (' + rs.status + ')'), false);
+    return;
+  }
+
+  if (rs.status === 423) {
+    var minExpires = parseInt(rs.headers['min-expires'], 10);
+    if (!this._retried423 && !isNaN(minExpires)) {
+      this._retried423 = true;
+      this.requestedExpires = minExpires;
+      this._sendRegister(this._buildRegister(minExpires));
+      return;
+    }
+    this._fail(new Error('Registration rejected: 423 Interval Too Brief'), false);
     return;
   }
 };
