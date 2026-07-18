@@ -28,6 +28,9 @@ function RegistrationClient(options) {
   this._localTag = sip.generateTag();
   this._cseq = 0;
   this._refreshTimer = null;
+  this._backoffFloorMs = options.backoffFloorMs || 1000;
+  this._backoffMs = this._backoffFloorMs;
+  this._backoffTimer = null;
   this._authCtx = {};
   this._authAttempted = false;
   this._retried423 = false;
@@ -85,6 +88,7 @@ RegistrationClient.prototype._onResponse = function(rq, rs) {
   if (rs.status >= 200 && rs.status < 300) {
     this._authAttempted = false;   // fresh auth cycle for next refresh
     this._retried423 = false;
+    this._backoffMs = this._backoffFloorMs;   // reset backoff on success
     var granted = grantedExpires(rs, this.requestedExpires);
     this.state = 'registered';
     this._scheduleRefresh(granted);
@@ -116,6 +120,15 @@ RegistrationClient.prototype._onResponse = function(rq, rs) {
     this._fail(new Error('Registration rejected: 423 Interval Too Brief'), false);
     return;
   }
+
+  // 408 (transaction timeout), 503, and anything else unexpected: retry with backoff
+  var self2 = this;
+  this._fail(new Error('Registration failed: ' + rs.status + ' ' + (rs.reason || '')), true);
+  this._backoffTimer = setTimeout(function() {
+    self2._backoffTimer = null;
+    self2._sendRegister(self2._buildRegister(self2.requestedExpires));
+  }, this._backoffMs);
+  this._backoffMs = Math.min(this._backoffMs * 2, 60000);
 };
 
 RegistrationClient.prototype._fail = function(err, willRetry) {
@@ -158,6 +171,10 @@ RegistrationClient.prototype._clearRefresh = function() {
 // Test/teardown helper — cancels pending timers without sending anything
 RegistrationClient.prototype.stopTimers = function() {
   this._clearRefresh();
+  if (this._backoffTimer) {
+    clearTimeout(this._backoffTimer);
+    this._backoffTimer = null;
+  }
 };
 
 exports.RegistrationClient = RegistrationClient;

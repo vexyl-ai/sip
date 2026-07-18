@@ -256,6 +256,67 @@ await testAsync('double 423 → failed, no loop', async function() {
   client.stopTimers();
 });
 
+console.log('\n=== RegistrationClient: transport failure backoff ===');
+
+await testAsync('408 → failed(willRetry=true) → auto-retry succeeds', async function() {
+  var sent = [];
+  var failures = [];
+  var client = new RegistrationClient({
+    aor: 'sip:100@pbx.local',
+    publicAddress: '10.0.0.5',
+    port: 5060,
+    backoffFloorMs: 10,           // fast test
+    sipSend: function(rq, cb) {
+      sent.push(rq);
+      if (sent.length === 1) {
+        setImmediate(function() { cb({ status: 408, reason: 'Request Timeout',
+          headers: { to: rq.headers.to, from: rq.headers.from,
+                     'call-id': rq.headers['call-id'], cseq: rq.headers.cseq } }); });
+      } else {
+        setImmediate(function() { cb(ok200(rq, 300)); });
+      }
+    }
+  });
+  client.on('failed', function(err, willRetry) { failures.push(willRetry); });
+  var granted = await new Promise(function(resolve) {
+    client.on('registered', resolve);
+    client.register();
+  });
+  assert.strictEqual(granted, 300);
+  assert.deepStrictEqual(failures, [true]);
+  assert.strictEqual(sent.length, 2);
+  client.stopTimers();
+});
+
+await testAsync('backoff delay doubles', async function() {
+  var times = [];
+  var client = new RegistrationClient({
+    aor: 'sip:100@pbx.local',
+    publicAddress: '10.0.0.5',
+    port: 5060,
+    backoffFloorMs: 20,
+    sipSend: function(rq, cb) {
+      times.push(Date.now());
+      if (times.length <= 3) {
+        setImmediate(function() { cb({ status: 503, reason: 'Service Unavailable',
+          headers: { to: rq.headers.to, from: rq.headers.from,
+                     'call-id': rq.headers['call-id'], cseq: rq.headers.cseq } }); });
+      } else {
+        setImmediate(function() { cb(ok200(rq, 300)); });
+      }
+    }
+  });
+  await new Promise(function(resolve) {
+    client.on('registered', resolve);
+    client.register();
+  });
+  assert.strictEqual(times.length, 4);
+  var gap1 = times[1] - times[0];
+  var gap2 = times[2] - times[1];
+  assert.ok(gap2 >= gap1 * 1.5, 'second gap (' + gap2 + 'ms) should be ~2x first (' + gap1 + 'ms)');
+  client.stopTimers();
+});
+
 })();
 
 mainRun.then(function() {
