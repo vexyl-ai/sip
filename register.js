@@ -1,0 +1,246 @@
+// ============================================================================
+// @vexyl.ai/sip — Registration client (RFC 3261 §10)
+// Registers the stack as an extension against a PBX/registrar.
+// ============================================================================
+
+var EventEmitter = require('events').EventEmitter;
+var crypto = require('crypto');
+var sip = require('./sip');
+var digest = require('./digest');
+
+function RegistrationClient(options) {
+  EventEmitter.call(this);
+
+  options = options || {};
+  if (!options.aor) throw new Error('RegistrationClient: aor is required');
+  if (typeof options.sipSend !== 'function') throw new Error('RegistrationClient: sipSend is required');
+
+  this.aor = options.aor;
+  this.registrarUri = options.registrarUri || deriveRegistrar(options.aor);
+  this.credentials = options.credentials || null;   // {user, password, realm?}
+  this.requestedExpires = options.expires || 3600;
+  this.publicAddress = options.publicAddress;
+  this.port = options.port || 5060;
+  this._sipSend = options.sipSend;
+
+  this.state = 'unregistered';
+  this._callId = crypto.randomUUID();
+  this._localTag = sip.generateTag();
+  this._cseq = 0;
+  this._refreshTimer = null;
+  this._backoffFloorMs = options.backoffFloorMs || 1000;
+  this._backoffMs = this._backoffFloorMs;
+  this._backoffTimer = null;
+  this._authCtx = {};
+  this._authAttempted = false;
+  this._retried423 = false;
+  this._bound = false;
+}
+
+RegistrationClient.prototype = Object.create(EventEmitter.prototype);
+RegistrationClient.prototype.constructor = RegistrationClient;
+
+// Registrar URI = AOR without the user part: sip:100@pbx.local → sip:pbx.local
+function deriveRegistrar(aor) {
+  var parsed = sip.parseUri(aor);
+  if (!parsed) throw new Error('RegistrationClient: cannot parse aor: ' + aor);
+  return parsed.schema + ':' + parsed.host + (parsed.port ? ':' + parsed.port : '');
+}
+
+RegistrationClient.prototype._contactUri = function() {
+  var parsed = sip.parseUri(this.aor);
+  var user = (parsed && parsed.user) || 'vexyl';
+  return 'sip:' + user + '@' + this.publicAddress + ':' + this.port;
+};
+
+RegistrationClient.prototype._buildRegister = function(expires) {
+  this._cseq++;
+  return {
+    method: 'REGISTER',
+    uri: this.registrarUri,
+    headers: {
+      to: { uri: this.aor },
+      from: { uri: this.aor, params: { tag: this._localTag } },
+      'call-id': this._callId,
+      cseq: { method: 'REGISTER', seq: this._cseq },
+      contact: [{ uri: this._contactUri() }],
+      expires: expires,
+      'max-forwards': 70
+    }
+  };
+};
+
+RegistrationClient.prototype.register = function() {
+  if (this.state === 'registering' || this.state === 'refreshing') return;
+  this.state = this.state === 'registered' ? 'refreshing' : 'registering';
+  this._sendRegister(this._buildRegister(this.requestedExpires));
+};
+
+RegistrationClient.prototype._sendRegister = function(rq) {
+  var self = this;
+  this._sipSend(rq, function(rs) {
+    self._onResponse(rq, rs);
+  });
+};
+
+RegistrationClient.prototype._onResponse = function(rq, rs) {
+  var self = this;
+  if (this.state === 'unregistering' || this.state === 'unregistered') return;
+
+  if (rs.status >= 200 && rs.status < 300) {
+    this._authAttempted = false;   // fresh auth cycle for next refresh
+    this._retried423 = false;
+    this._backoffMs = this._backoffFloorMs;   // reset backoff on success
+    var granted = grantedExpires(rs, this.requestedExpires);
+    this.state = 'registered';
+    this._bound = true;
+    this._scheduleRefresh(granted);
+    this.emit('registered', granted);
+    return;
+  }
+
+  if (rs.status === 401 || rs.status === 407) {
+    // RFC 2617: retry once with signed request; also retry when nonce is stale
+    if (this.credentials && (!this._authAttempted || this._authCtx.stale)) {
+      this._authAttempted = true;
+      var retry = this._buildRegister(this.requestedExpires);
+      digest.signRequest(this._authCtx, retry, rs, this.credentials);
+      this._sendRegister(retry);
+      return;
+    }
+    this._fail(new Error('Registration auth failed (' + rs.status + ')'), false);
+    return;
+  }
+
+  if (rs.status === 423) {
+    var minExpires = parseInt(rs.headers['min-expires'], 10);
+    if (!this._retried423 && !isNaN(minExpires)) {
+      this._retried423 = true;
+      this.requestedExpires = minExpires;
+      this._sendRegister(this._buildRegister(minExpires));
+      return;
+    }
+    this._fail(new Error('Registration rejected: 423 Interval Too Brief'), false);
+    return;
+  }
+
+  // Retryable: request timeout (408) and server errors (5xx) — back off and retry
+  if (rs.status === 408 || (rs.status >= 500 && rs.status <= 599)) {
+    this._fail(new Error('Registration failed: ' + rs.status + ' ' + (rs.reason || '')), true);
+    this._backoffTimer = setTimeout(function() {
+      self._backoffTimer = null;
+      self._sendRegister(self._buildRegister(self.requestedExpires));
+    }, this._backoffMs);
+    this._backoffMs = Math.min(this._backoffMs * 2, 60000);
+    return;
+  }
+
+  // Permanent rejection (other 4xx, 3xx, 6xx): terminal failure, no retry
+  this._fail(new Error('Registration rejected: ' + rs.status + ' ' + (rs.reason || '')), false);
+};
+
+RegistrationClient.prototype._fail = function(err, willRetry) {
+  if (!willRetry) this.state = 'unregistered';
+  this.emit('failed', err, willRetry);
+};
+
+// Granted expiry: matching Contact param wins, then Expires header, then requested
+function grantedExpires(rs, fallback) {
+  if (rs.headers.contact && rs.headers.contact.length > 0) {
+    var params = rs.headers.contact[0].params;
+    if (params && params.expires !== undefined) {
+      var e = parseInt(params.expires, 10);
+      if (!isNaN(e)) return e;
+    }
+  }
+  if (rs.headers.expires !== undefined) {
+    var eh = parseInt(rs.headers.expires, 10);
+    if (!isNaN(eh)) return eh;
+  }
+  return fallback;
+}
+
+// Re-REGISTER at 80% of granted interval
+RegistrationClient.prototype._scheduleRefresh = function(granted) {
+  var self = this;
+  this._clearRefresh();
+  this._refreshTimer = setTimeout(function() {
+    self.register();
+  }, Math.max(granted * 800, 1000));   // granted is seconds; 80% in ms; floor 1s
+};
+
+RegistrationClient.prototype._clearRefresh = function() {
+  if (this._refreshTimer) {
+    clearTimeout(this._refreshTimer);
+    this._refreshTimer = null;
+  }
+};
+
+// Test/teardown helper — cancels pending timers without sending anything
+RegistrationClient.prototype.stopTimers = function() {
+  this._clearRefresh();
+  if (this._backoffTimer) {
+    clearTimeout(this._backoffTimer);
+    this._backoffTimer = null;
+    // A backoff retry was only scheduled, not in flight — return to a clean
+    // state so a later register() is not blocked by the in-progress guard.
+    if (this.state === 'registering' || this.state === 'refreshing') {
+      this.state = 'unregistered';
+    }
+  }
+};
+
+// Unregister: Expires 0. Resolves regardless of the registrar's answer —
+// teardown must never hang on a dead registrar.
+RegistrationClient.prototype.stop = function() {
+  var self = this;
+  this.stopTimers();
+
+  if (this.state === 'unregistering') {
+    // an unregister is already in flight; don't send a second or double-emit
+    return Promise.resolve();
+  }
+  if (!this._bound) {
+    // never confirmed a binding (or already cleared) — nothing to unregister
+    this.state = 'unregistered';
+    return Promise.resolve();
+  }
+
+  this.state = 'unregistering';
+  return new Promise(function(resolve) {
+    var rq = self._buildRegister(0);
+    var done = false;
+    var finish = function() {
+      if (done) return;
+      done = true;
+      self._bound = false;
+      self.state = 'unregistered';
+      self.emit('unregistered');
+      resolve();
+    };
+    var guard = setTimeout(finish, 2000);   // registrar unreachable → resolve anyway
+    self._sipSend(rq, function(rs) {
+      // Auth the unregister if challenged, once
+      if ((rs.status === 401 || rs.status === 407) && self.credentials && !done) {
+        var retry = self._buildRegister(0);
+        digest.signRequest(self._authCtx, retry, rs, self.credentials);
+        self._sipSend(retry, function() { clearTimeout(guard); finish(); });
+        return;
+      }
+      clearTimeout(guard);
+      finish();
+    });
+  });
+};
+
+RegistrationClient.prototype.getStats = function() {
+  return {
+    aor: this.aor,
+    registrarUri: this.registrarUri,
+    state: this.state,
+    cseq: this._cseq,
+    requestedExpires: this.requestedExpires
+  };
+};
+
+exports.RegistrationClient = RegistrationClient;

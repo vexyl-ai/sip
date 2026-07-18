@@ -1,7 +1,7 @@
 {
   "name": "@vexyl.ai/sip",
   "description": "Pure Node.js SIP stack for AI voice agents — no native deps, no sidecar",
-  "version": "1.0.4",
+  "version": "1.1.0",
   "homepage": "https://github.com/vexyl-ai/sip",
   "author": "Vexyl AI",
   "contributors": [
@@ -42,6 +42,10 @@
     "./vexyl-sip-bridge": {
       "types": "./vexyl-sip-bridge.d.ts",
       "default": "./vexyl-sip-bridge.js"
+    },
+    "./register": {
+      "types": "./register.d.ts",
+      "default": "./register.js"
     }
   },
   "scripts": {
@@ -50,6 +54,8 @@
     "test:phase4": "node test/test-phase4.js",
     "test:phase5": "node test/test-phase5.js",
     "test:all": "node test/test-phase3.js && node test/test-phase4.js && node test/test-phase5.js",
+    "test:register": "node test/test-register.js",
+    "test:register-integration": "node test/test-register-integration.js",
     "start:sip": "node sip-server.js"
   },
   "directories": {
