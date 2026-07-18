@@ -408,6 +408,35 @@ await testAsync('stop() resolves even if unregister gets no useful answer', asyn
   assert.strictEqual(client.state, 'unregistered');
 });
 
+console.log('\n=== SipStack.register integration ===');
+
+var SipStack = require('../stack').SipStack;
+
+await testAsync('stack.register returns started client; stack.stop unregisters', async function() {
+  var stack = new SipStack({ port: 45061, publicAddress: '127.0.0.1' });
+  await stack.start();
+
+  var sent = [];
+  // Inject: intercept the transaction sender the stack hands to clients
+  var client = stack.register('sip:100@127.0.0.1:45999', {
+    credentials: { user: '100', password: 'x' },
+    _sipSendOverride: function(rq, cb) {
+      sent.push(rq);
+      setImmediate(function() { cb(ok200(rq, 60)); });
+    }
+  });
+
+  await new Promise(function(resolve) { client.on('registered', resolve); });
+  assert.strictEqual(sent[0].method, 'REGISTER');
+  assert.strictEqual(stack.getRegistrations().length, 1);
+
+  await stack.stop();
+  assert.strictEqual(client.state, 'unregistered');
+  var last = sent[sent.length - 1];
+  assert.strictEqual(last.headers.expires, 0, 'stop must unregister');
+  assert.strictEqual(stack.getRegistrations().length, 0);
+});
+
 })();
 
 mainRun.then(function() {

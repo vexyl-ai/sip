@@ -19,6 +19,7 @@ var sdp = require('./sdp');
 var rtp = require('./rtp');
 var digest = require('./digest');
 var Dialog = require('./dialog').Dialog;
+var RegistrationClient = require('./register').RegistrationClient;
 
 // ============================================================================
 // SipStack — non-singleton, EventEmitter-based SIP stack
@@ -55,6 +56,9 @@ function SipStack(options) {
 
   // T-25: Digest auth credentials
   this._credentials = this.options.credentials || null; // {user, password, realm?}
+
+  // Interop phase 1: registration clients
+  this._registrations = [];
 }
 
 SipStack.prototype = Object.create(EventEmitter.prototype);
@@ -98,6 +102,11 @@ SipStack.prototype.stop = function() {
   return new Promise(function(resolve) {
     if (!self.active) return resolve();
 
+    // Interop phase 1: unregister everything first, while transport is alive
+    var regs = self._registrations.slice();
+    self._registrations = [];
+    var unregPromises = regs.map(function(r) { return r.stop().catch(function() {}); });
+
     // T-28: Stop keepalive timers
     self._stopKeepalives();
 
@@ -114,7 +123,7 @@ SipStack.prototype.stop = function() {
       return Promise.resolve();
     });
 
-    Promise.all(cleanupPromises).then(function() {
+    Promise.all(unregPromises.concat(cleanupPromises)).then(function() {
       self._dialogs = {};
 
       if (self._instance) {
@@ -596,6 +605,45 @@ SipStack.prototype._sendOptions = function(uri) {
 // Send OPTIONS ping on demand
 SipStack.prototype.sendOptions = function(uri) {
   this._sendOptions(uri);
+};
+
+// ============================================================================
+// Interop phase 1: REGISTER client (RFC 3261 §10)
+// ============================================================================
+SipStack.prototype.register = function(aor, options) {
+  if (!this.active || !this._instance) throw new Error('SipStack not started');
+  options = options || {};
+
+  var self = this;
+  var client = new RegistrationClient({
+    aor: aor,
+    registrarUri: options.registrarUri,
+    credentials: options.credentials || this._credentials,
+    expires: options.expires,
+    publicAddress: this.options.publicAddress || this.options.hostname || '127.0.0.1',
+    port: this.options.port,
+    backoffFloorMs: options.backoffFloorMs,
+    sipSend: options._sipSendOverride || this._instance.send.bind(this._instance)
+  });
+
+  this._registrations.push(client);
+  client.on('unregistered', function() {
+    var i = self._registrations.indexOf(client);
+    if (i !== -1) self._registrations.splice(i, 1);
+  });
+
+  // T-28 reuse: OPTIONS keepalive toward the registrar for NAT hole-punching
+  if (options.keepalive) {
+    this._keepaliveTargets.push({ uri: client.registrarUri, interval: options.keepaliveInterval });
+    this._startKeepalives && this._startKeepalives();
+  }
+
+  client.register();
+  return client;
+};
+
+SipStack.prototype.getRegistrations = function() {
+  return this._registrations.slice();
 };
 
 // ============================================================================
