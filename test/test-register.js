@@ -110,6 +110,91 @@ await testAsync('explicit registrarUri overrides AOR-derived registrar', async f
   client.stopTimers();
 });
 
+console.log('\n=== RegistrationClient: digest auth ===');
+
+function challenge401(rq) {
+  return {
+    status: 401,
+    reason: 'Unauthorized',
+    headers: {
+      to: { uri: rq.headers.to.uri, params: { tag: 'srv-tag' } },
+      from: rq.headers.from,
+      'call-id': rq.headers['call-id'],
+      cseq: rq.headers.cseq,
+      'www-authenticate': [{
+        scheme: 'Digest',
+        realm: '"pbx"',
+        nonce: '"abc123"',
+        algorithm: 'MD5',
+        qop: '"auth"'
+      }]
+    }
+  };
+}
+
+await testAsync('401 → signed retry → registered', async function() {
+  var sent = [];
+  var client = new RegistrationClient({
+    aor: 'sip:100@pbx.local',
+    publicAddress: '10.0.0.5',
+    port: 5060,
+    credentials: { user: '100', password: 'secret' },
+    sipSend: function(rq, cb) {
+      sent.push(rq);
+      if (sent.length === 1) setImmediate(function() { cb(challenge401(rq)); });
+      else setImmediate(function() { cb(ok200(rq, 300)); });
+    }
+  });
+  var granted = await new Promise(function(resolve, reject) {
+    client.on('registered', resolve);
+    client.on('failed', reject);
+    client.register();
+  });
+  assert.strictEqual(granted, 300);
+  assert.strictEqual(sent.length, 2);
+  assert.strictEqual(sent[1].headers.cseq.seq, 2, 'retry must bump CSeq');
+  assert.ok(sent[1].headers.authorization, 'retry must carry Authorization');
+  client.stopTimers();
+});
+
+await testAsync('second 401 → failed(willRetry=false), no third attempt', async function() {
+  var sent = [];
+  var client = new RegistrationClient({
+    aor: 'sip:100@pbx.local',
+    publicAddress: '10.0.0.5',
+    port: 5060,
+    credentials: { user: '100', password: 'wrong' },
+    sipSend: function(rq, cb) {
+      sent.push(rq);
+      setImmediate(function() { cb(challenge401(rq)); });
+    }
+  });
+  var result = await new Promise(function(resolve) {
+    client.on('failed', function(err, willRetry) { resolve({ err: err, willRetry: willRetry }); });
+    client.register();
+  });
+  assert.strictEqual(result.willRetry, false);
+  assert.ok(/auth/i.test(result.err.message));
+  assert.strictEqual(sent.length, 2, 'must not hammer registrar');
+  assert.strictEqual(client.state, 'unregistered');
+  client.stopTimers();
+});
+
+await testAsync('401 with no credentials → failed immediately', async function() {
+  var client = new RegistrationClient({
+    aor: 'sip:100@pbx.local',
+    publicAddress: '10.0.0.5',
+    port: 5060,
+    sipSend: function(rq, cb) { setImmediate(function() { cb(challenge401(rq)); }); }
+  });
+  var result = await new Promise(function(resolve) {
+    client.on('failed', function(err, willRetry) { resolve({ willRetry: willRetry }); });
+    client.register();
+  });
+  assert.strictEqual(result.willRetry, false);
+  client.stopTimers();
+});
+
 })();
 
 mainRun.then(function() {
