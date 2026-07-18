@@ -294,30 +294,32 @@ SipSession.prototype.constructor = SipSession;
 SipSession.prototype._wireDialog = function() {
   var self = this;
 
-  this._dialog.on('audio', function(pcm, header) {
+  // Store named references so we can remove them individually on cleanup
+  this._onDialogAudio = function(pcm, header) {
     if (self.state !== 'active') {
       self.state = 'active';
     }
-    // Emit PCM buffer — same as AudioSocket provides
     self.emit('audio', pcm);
-  });
-
-  this._dialog.on('dtmf', function(digit, method) {
+  };
+  this._onDialogDtmf = function(digit, method) {
     self.emit('dtmf', digit, method);
-  });
-
-  this._dialog.on('end', function(reason) {
+  };
+  this._onDialogEnd = function(reason) {
     self._end(reason);
-  });
-
-  this._dialog.on('error', function(err) {
+  };
+  this._onDialogError = function(err) {
     self.emit('error', err);
-  });
-
-  this._dialog.on('ready', function() {
+  };
+  this._onDialogReady = function() {
     self.state = 'active';
     self.emit('ready');
-  });
+  };
+
+  this._dialog.on('audio', this._onDialogAudio);
+  this._dialog.on('dtmf', this._onDialogDtmf);
+  this._dialog.on('end', this._onDialogEnd);
+  this._dialog.on('error', this._onDialogError);
+  this._dialog.on('ready', this._onDialogReady);
 };
 
 // Send PCM audio to the caller (TTS output)
@@ -425,7 +427,21 @@ SipSession.prototype.getStats = function() {
 SipSession.prototype._end = function(reason) {
   if (this.state === 'ended') return;
   this.state = 'ended';
+
+  // Remove only our own listeners on the dialog (don't nuke dialog's other listeners)
+  if (this._dialog) {
+    if (this._onDialogAudio) this._dialog.removeListener('audio', this._onDialogAudio);
+    if (this._onDialogDtmf) this._dialog.removeListener('dtmf', this._onDialogDtmf);
+    if (this._onDialogEnd) this._dialog.removeListener('end', this._onDialogEnd);
+    if (this._onDialogError) this._dialog.removeListener('error', this._onDialogError);
+    if (this._onDialogReady) this._dialog.removeListener('ready', this._onDialogReady);
+    this._dialog = null;
+  }
+
   this.emit('end', reason || 'unknown');
+
+  // Remove all session listeners after emitting 'end'
+  this.removeAllListeners();
 };
 
 // ============================================================================
