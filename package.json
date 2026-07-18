@@ -50,6 +50,7 @@
     "test:phase4": "node test/test-phase4.js",
     "test:phase5": "node test/test-phase5.js",
     "test:all": "node test/test-phase3.js && node test/test-phase4.js && node test/test-phase5.js",
+    "test:register": "node test/test-register.js",
     "start:sip": "node sip-server.js"
   },
   "directories": {
