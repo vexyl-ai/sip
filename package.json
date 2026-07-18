@@ -1,7 +1,7 @@
 {
   "name": "@vexyl.ai/sip",
   "description": "Pure Node.js SIP stack for AI voice agents — no native deps, no sidecar",
-  "version": "1.0.4",
+  "version": "1.1.0",
   "homepage": "https://github.com/vexyl-ai/sip",
   "author": "Vexyl AI",
   "contributors": [

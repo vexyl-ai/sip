@@ -6,6 +6,23 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [1.1.0] - 2026-07-18
+
+### Added
+
+- **REGISTER client** (`@vexyl.ai/sip/register`, RFC 3261 §10) — register as a PBX/SBC extension via `stack.register(aor, options)`. Digest auth with single retry (double-401 fails terminally), auto-refresh at 80% of the granted interval, `423 Interval Too Brief` honored with the server's `Min-Expires`, exponential backoff (1s→60s cap) on transport failure (408/5xx), and clean unregister (`Expires: 0`) on `client.stop()` / `stack.stop()`. Permanent rejections (403/404 and other non-408/5xx) fail terminally without retry. Optional OPTIONS keepalive toward the registrar for NAT. Emits `registered` / `unregistered` / `failed(err, willRetry)`. Full TypeScript declarations. (register.js, stack.js)
+- Integration test against Asterisk in Docker (`npm run test:register-integration`, skips cleanly without Docker). (test/)
+
+### Fixed
+
+- **Keepalive timer leak** — `_startKeepalives()` was not idempotent; repeated calls (now reachable via `register(..., { keepalive: true })`) orphaned prior `setInterval` timers, leaking OPTIONS pings past `stack.stop()`. Now clears existing timers before rebuilding. (stack.js)
+
+## [1.0.4] - 2026-07-18
+
+### Fixed
+
+- **TypeScript typings on subpath imports** — the `exports` map used bare string targets with no `types` condition, so under `node16`/`nodenext`/`bundler` resolution subpath imports (`@vexyl.ai/sip/stack`, etc.) resolved with no typings (TS7016). Added per-subpath `.d.ts` shims re-exporting from `index.d.ts` and a `types` condition on every `exports` entry. (package.json, *.d.ts)
+
 ## [1.0.3] - 2026-03-13
 
 ### Fixed

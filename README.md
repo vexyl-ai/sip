@@ -237,7 +237,9 @@ stack.on('invite', async (dialog) => {
 
 Register as a PBX extension (RFC 3261 §10). Auto-refreshes at 80% of the
 granted interval, retries digest auth once, honors 423 Min-Expires, backs
-off exponentially on transport failure, unregisters on `stack.stop()`.
+off exponentially on transport failure (408/5xx), and unregisters on
+`stack.stop()`. Permanent rejections (403/404 and other non-408/5xx) emit
+`failed(err, false)` without retrying.
 
 ```js
 const reg = stack.register('sip:100@pbx.local', {
