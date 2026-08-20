@@ -289,6 +289,35 @@ var port = pool.allocate();   // Even port (RTCP = port+1)
 pool.release(port);
 ```
 
+#### Worker-thread pacer (optional)
+
+RTP frame timing normally rides the main event loop, so a main-thread stall
+(logging burst, GC-adjacent work) delays frames and emits them in a catch-up
+burst — receivers drop late frames and callers hear breaking audio. Assign a
+pacer manager to `RtpSession.pacer` and each session hands its UDP socket and
+20ms transmit clock to a worker thread instead:
+
+```js
+var rtp = require('@vexyl.ai/sip/rtp');
+rtp.RtpSession.pacer = getRtpPacer();  // your manager; see below
+
+// Unchanged from here — the session routes TX through the worker
+session.sendPcm(pcmBuffer);
+await session.pacerFlush();  // drop worker-queued frames (barge-in cut)
+```
+
+The pacer implementation ships with the host app, not this package. It must
+provide `isAlive()`, `open({ port, address, ssrc, payloadType, onRx })` →
+`Promise<{ sid, port }>`, `setRemote(sid, address, port)`,
+`sendPcm(sid, pcm)`, `sendRaw(sid, payload, payloadType, samples, marker)`,
+`flush(sid)` → `Promise<number>`, and `close(sid)` (typed as `rtp.RtpPacer`).
+
+Inbound packets stay on the main thread: the worker forwards them to `onRx`,
+which feeds the jitter buffer, SSRC tracking and symmetric-RTP latch as before.
+Leaving `RtpSession.pacer` at `null` — the default — keeps the in-process
+socket path, and any pacer failure (open rejection, dead worker) falls back to
+it automatically, so the pacer can never take a call down.
+
 ### DTMF (`@vexyl.ai/sip/dtmf`)
 
 ```js

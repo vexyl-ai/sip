@@ -354,6 +354,28 @@ export namespace rtp {
     length(): number;
   }
 
+  /**
+   * Contract for an external RTP pacer manager (worker-thread transmit clock).
+   * Assign an implementation to `RtpSession.pacer` to move each session's UDP
+   * socket and 20ms frame clock off the main event loop; leave it `null` for
+   * the in-process socket path.
+   */
+  interface RtpPacer {
+    isAlive(): boolean;
+    open(options: {
+      port: number | null;
+      address?: string;
+      ssrc: number;
+      payloadType: number;
+      onRx: (data: Buffer, rinfo: { address: string; port: number }) => void;
+    }): Promise<{ sid: number; port: number }>;
+    setRemote(sid: number, address: string, port: number): void;
+    sendPcm(sid: number, pcmBuffer: Buffer): boolean;
+    sendRaw(sid: number, payload: Buffer, payloadType: number, samples: number, marker: number): boolean;
+    flush(sid: number): Promise<number>;
+    close(sid: number): void;
+  }
+
   class RtpSession extends EventEmitter {
     localPort: number | null;
     remoteAddress: string | null;
@@ -365,6 +387,9 @@ export namespace rtp {
     sequenceNumber: number;
     timestamp: number;
 
+    /** Injected pacer manager shared by all sessions; null = in-process socket. */
+    static pacer: RtpPacer | null;
+
     constructor(options?: RtpSessionOptions);
     start(callback?: (err: Error | null, addr?: { address: string; port: number }) => void): void;
     stop(): void;
@@ -373,6 +398,8 @@ export namespace rtp {
     sendPcmPaced(pcmBuffer: Buffer, callback?: () => void): void;
     enqueuePcm(pcmBuffer: Buffer): void;
     getRemote(): { address: string; port: number };
+    /** Drop frames still queued in the pacer worker (barge-in cut); resolves with the drop count, 0 on the in-process path. */
+    pacerFlush(): Promise<number>;
     getStats(): RtpStats;
 
     on(event: 'audio', listener: (pcm: Buffer, header: RtpHeader) => void): this;

@@ -368,7 +368,16 @@ function RtpSession(options) {
   this.sendQueue = [];
   this.pool = options.pool || null;
   this.stats = { packetsReceived: 0, packetsSent: 0, bytesReceived: 0, bytesSent: 0, packetsLost: 0 };
+
+  // Worker pacer (see rtp-pacer.js in the host app). When injected via
+  // RtpSession.pacer and alive, the worker owns this session's UDP socket and
+  // TX clock, so main-thread event-loop stalls cannot delay frame emission.
+  this._pacerSid = null;
+  this._pacerRemote = null;
 }
+
+// Host app injects a pacer manager here (RtpSession.pacer = getRtpPacer()).
+RtpSession.pacer = null;
 
 RtpSession.prototype = Object.create(EventEmitter.prototype);
 RtpSession.prototype.constructor = RtpSession;
@@ -387,6 +396,36 @@ RtpSession.prototype.start = function(callback) {
     }
   }
 
+  // Worker-owned socket path. Falls back to the legacy in-process socket on
+  // any pacer failure so the pacer can never take a call down.
+  var pacer = RtpSession.pacer;
+  if (pacer && pacer.isAlive()) {
+    pacer.open({
+      port: this.localPort,
+      address: this.localAddress,
+      ssrc: this.ssrc,
+      payloadType: this.payloadType,
+      onRx: function(data, rinfo) { self._onPacket(data, rinfo); }
+    }).then(function(res) {
+      self._pacerSid = res.sid;
+      self.localPort = res.port;
+      self.active = true;
+      self._syncPacerRemote();
+      self.emit('ready', { address: self.localAddress, port: res.port });
+      if (callback) callback(null, { address: self.localAddress, port: res.port });
+    }).catch(function(err) {
+      console.error('WARN: RTP pacer open failed (' + err.message + '), using in-process socket');
+      self._pacerSid = null;
+      self._startLegacy(callback);
+    });
+    return;
+  }
+
+  this._startLegacy(callback);
+};
+
+RtpSession.prototype._startLegacy = function(callback) {
+  var self = this;
   this.socket = dgram.createSocket('udp4');
 
   this.socket.on('error', function(err) {
@@ -424,6 +463,7 @@ RtpSession.prototype._onPacket = function(data, rinfo) {
     this.natPort = rinfo.port;
     // Lock after first packet to prevent spoofing
     this.natLocked = true;
+    this._syncPacerRemote();
   }
 
   // Decode payload if we have a codec
@@ -455,9 +495,42 @@ RtpSession.prototype.getRemote = function() {
   return { address: this.remoteAddress, port: this.remotePort };
 };
 
+// Push the current effective remote to the pacer worker when it changes
+// (initial SDP remote, symmetric-RTP re-latch, re-INVITE).
+RtpSession.prototype._syncPacerRemote = function() {
+  if (this._pacerSid === null || !RtpSession.pacer) return;
+  var remote = this.getRemote();
+  if (!remote.address || !remote.port) return;
+  var key = remote.address + ':' + remote.port;
+  if (key === this._pacerRemote) return;
+  this._pacerRemote = key;
+  RtpSession.pacer.setRemote(this._pacerSid, remote.address, remote.port);
+};
+
+// Drop any frames still queued in the pacer worker (barge-in / interrupt cut).
+// Resolves with the number of dropped frames; no-op on the legacy path.
+RtpSession.prototype.pacerFlush = function() {
+  if (this._pacerSid !== null && RtpSession.pacer) return RtpSession.pacer.flush(this._pacerSid);
+  return Promise.resolve(0);
+};
+
 // Send raw RTP payload (already encoded)
 RtpSession.prototype.sendPayload = function(payload, options) {
-  if (!this.active || !this.socket) return;
+  if (!this.active) return;
+
+  if (this._pacerSid !== null && RtpSession.pacer && RtpSession.pacer.isAlive()) {
+    options = options || {};
+    this._syncPacerRemote();
+    RtpSession.pacer.sendRaw(
+      this._pacerSid, payload,
+      options.payloadType !== undefined ? options.payloadType : this.payloadType,
+      this.codec.frameSize, options.marker || 0
+    );
+    this.stats.packetsSent++;
+    this.stats.bytesSent += payload.length + 12;
+    return;
+  }
+  if (!this.socket) return;
 
   options = options || {};
   var remote = this.getRemote();
@@ -481,6 +554,14 @@ RtpSession.prototype.sendPayload = function(payload, options) {
 
 // Send PCM audio — encodes and sends
 RtpSession.prototype.sendPcm = function(pcmBuffer) {
+  if (this._pacerSid !== null && RtpSession.pacer && RtpSession.pacer.isAlive()) {
+    this._syncPacerRemote();
+    // Worker encodes (G.711 table lookup) and paces on its own clock.
+    RtpSession.pacer.sendPcm(this._pacerSid, pcmBuffer);
+    this.stats.packetsSent++;
+    this.stats.bytesSent += (pcmBuffer.length >> 1) + 12;
+    return;
+  }
   if (!this.codec || !this.codec.encode) return;
   var encoded = this.codec.encode(pcmBuffer);
   this.sendPayload(encoded);
@@ -551,6 +632,11 @@ RtpSession.prototype.stop = function() {
 
   if (this.jitterBuffer) {
     this.jitterBuffer.reset();
+  }
+
+  if (this._pacerSid !== null && RtpSession.pacer) {
+    RtpSession.pacer.close(this._pacerSid);
+    this._pacerSid = null;
   }
 
   if (this.socket) {
